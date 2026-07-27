@@ -13,6 +13,12 @@ function extractJson(text) {
   return JSON.parse(match[0]);
 }
 
+function extractJsonArray(text) {
+  const match = text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error("Réponse IA sans tableau JSON exploitable: " + text);
+  return JSON.parse(match[0]);
+}
+
 async function callGemini(parts) {
   if (!GEMINI_API_KEY) {
     throw new Error(
@@ -71,37 +77,55 @@ Antworte AUSSCHLIESSLICH mit einem JSON in dieser Form, ohne Text drumherum:
   return { ...parsed, portions };
 }
 
-// Génère une recette high-protein / carb modéré / <700 kcal par portion à
-// partir de la liste d'aliments notés par l'utilisateur dans son frigo/placard.
-async function generateRecipeFromPantryItems(items, portions) {
+// Generiert mehrere eiweißreiche / kohlenhydratmoderate / <700 kcal Rezepte
+// aus den vom Nutzer im Kühlschrank/Vorrat notierten Lebensmitteln.
+// excludeTitles: Titel, die NICHT nochmal vorgeschlagen werden sollen
+// (z.B. wenn der Nutzer "andere Vorschläge" anfordert).
+async function generateRecipesFromPantryItems(items, portions, count = 3, excludeTitles = []) {
+  const excludeNote =
+    excludeTitles.length > 0
+      ? `\nSchlage KEINE dieser bereits gezeigten Rezepte (oder sehr ähnliche) erneut vor: ${excludeTitles.join(
+          ", "
+        )}. Denk dir wirklich andere Gerichte aus.`
+      : "";
+
   const prompt = `Hier sind die verfügbaren Lebensmittel eines Nutzers, der abnehmen möchte: ${items.join(
     ", "
   )}.
-Schlage EIN Rezept vor, das hauptsächlich mit diesen Zutaten umsetzbar ist (du kannst 1-2
-Grundzutaten wie Salz, Öl, Gewürze ergänzen, falls nötig). Strenge Vorgaben:
+Schlage ${count} VERSCHIEDENE Rezepte vor, die hauptsächlich mit diesen Zutaten umsetzbar sind
+(du kannst 1-2 Grundzutaten wie Salz, Öl, Gewürze pro Rezept ergänzen, falls nötig). Die ${count}
+Rezepte sollen sich spürbar voneinander unterscheiden (unterschiedliche Zubereitungsart, Hauptzutat
+oder Küchenstil). Strenge Vorgaben für JEDES Rezept:
 - Eiweißreich (mindestens 30g Eiweiß pro Portion)
 - Moderate Kohlenhydrate (maximal 50g pro Portion)
 - Weniger als 700 kcal pro Portion
-Das Rezept ist für ${portions} Portion(en) insgesamt (Zutatenmengen für ${portions} Portion(en),
-aber "perPortion" gilt für EINE einzelne Portion).
+Jedes Rezept ist für ${portions} Portion(en) insgesamt (Zutatenmengen für ${portions} Portion(en),
+aber "perPortion" gilt für EINE einzelne Portion).${excludeNote}
 
 WICHTIG: Schreibe ALLE Texte (Titel, Zutatennamen, Zubereitungsschritte, Tags) auf DEUTSCH.
 
-Antworte AUSSCHLIESSLICH mit einem JSON in dieser Form, ohne Text drumherum:
-{
-  "id": "string-slug",
-  "title": "string",
-  "tags": ["Abnehmen", "eiweißreich"],
-  "basePortions": ${portions},
-  "prepMinutes": number,
-  "ingredients": [{"name": "string", "quantity": number, "unit": "string"}],
-  "steps": ["string", ...],
-  "perPortion": {"kcal": number, "proteinG": number, "carbsG": number, "fatG": number}
-}`;
+Antworte AUSSCHLIESSLICH mit einem JSON-ARRAY von ${count} Objekten in dieser Form, ohne Text
+drumherum:
+[
+  {
+    "id": "string-slug",
+    "title": "string",
+    "tags": ["Abnehmen", "eiweißreich"],
+    "basePortions": ${portions},
+    "prepMinutes": number,
+    "ingredients": [{"name": "string", "quantity": number, "unit": "string"}],
+    "steps": ["string", ...],
+    "perPortion": {"kcal": number, "proteinG": number, "carbsG": number, "fatG": number}
+  }
+]`;
 
   const text = await callGemini([{ text: prompt }]);
-  const parsed = extractJson(text);
-  return { ...parsed, source: "pantry" };
+  const parsed = extractJsonArray(text);
+  return parsed.map((r, idx) => ({
+    ...r,
+    id: r.id || `pantry-${Date.now()}-${idx}`,
+    source: "pantry",
+  }));
 }
 
-module.exports = { analyzeTikTokFrames, generateRecipeFromPantryItems };
+module.exports = { analyzeTikTokFrames, generateRecipesFromPantryItems };
