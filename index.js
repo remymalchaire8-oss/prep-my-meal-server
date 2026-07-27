@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { downloadAndExtractFrames } = require("./tiktokDownload");
-const { analyzeTikTokFrames, generateRecipeFromPantryItems } = require("./analyzeFood");
+const { analyzeTikTokFrames, generateRecipesFromPantryItems } = require("./analyzeFood");
 
 const app = express();
 app.use(cors());
@@ -27,15 +27,16 @@ app.post("/analyze-tiktok", async (req, res) => {
 });
 
 app.post("/generate-recipe-from-pantry", async (req, res) => {
-  const { items, portions } = req.body;
+  const { items, portions, excludeTitles } = req.body;
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "items (liste d'aliments) est requis" });
   }
   const portionCount = Number(portions) > 0 ? Number(portions) : 1;
+  const exclude = Array.isArray(excludeTitles) ? excludeTitles : [];
 
   try {
-    const recipe = await generateRecipeFromPantryItems(items, portionCount);
-    res.json(recipe);
+    const recipes = await generateRecipesFromPantryItems(items, portionCount, 3, exclude);
+    res.json({ recipes });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
