@@ -53,7 +53,13 @@ async function analyzeTikTokFrames(framesBase64, portions) {
     inline_data: { mime_type: "image/jpeg", data },
   }));
 
-  const prompt = `Du bist ein Ernährungsexperte. Diese Bilder stammen aus einem TikTok-Kochvideo.
+  const prompt = `Du bist ein Ernährungsexperte. Diese Bilder sind mehrere Standbilder, die
+GLEICHMÄSSIG ÜBER DIE GESAMTE DAUER eines TikTok-Kochvideos verteilt entnommen wurden (Anfang,
+Mitte und Ende des Videos). Schau dir WIRKLICH JEDES einzelne Bild genau an, auch wenn eine
+Zutat nur auf einem einzigen Bild kurz zu sehen ist (z.B. eine Zutat, die nur beim Einwiegen
+oder Hinzufügen kurz gezeigt wird) — übernimm sie trotzdem in die Zutatenliste. Fasse ALLE über
+die Bilder verteilt sichtbaren Zutaten zusammen, nicht nur die aus dem ersten Bild.
+
 Identifiziere die sichtbaren Gerichte/Lebensmittel, leite ein plausibles Rezept ab (Zutaten +
 Zubereitungsschritte) und schätze die Nährwerte PRO PORTION (kcal, Eiweiß g, Kohlenhydrate g,
 Fett g). Das Rezept soll für ${portions} Portion(en) insgesamt angepasst werden (gib die
@@ -77,51 +83,67 @@ Antworte AUSSCHLIESSLICH mit einem JSON in dieser Form, ohne Text drumherum:
   return { ...parsed, portions };
 }
 
-// Generiert mehrere eiweißreiche / kohlenhydratmoderate / <700 kcal Rezepte
-// aus den vom Nutzer im Kühlschrank/Vorrat notierten Lebensmitteln.
-// excludeTitles: Titel, die NICHT nochmal vorgeschlagen werden sollen
-// (z.B. wenn der Nutzer "andere Vorschläge" anfordert).
-async function generateRecipesFromPantryItems(items, portions, count = 3, excludeTitles = []) {
+// Style-Vorgaben, um die parallel generierten Rezepte unterschiedlich zu
+// halten (statt 3x das gleiche naheliegende Gericht zu bekommen).
+const RECIPE_STYLE_HINTS = [
+  "Mach es schnell und einfach (maximal 20 Minuten Zubereitung).",
+  "Mach es klassisch/herzhaft, gerne mit warmer Zubereitung (Pfanne/Ofen).",
+  "Sei kreativ mit einer ungewöhnlicheren Kombination oder einem anderen Küchenstil.",
+];
+
+async function generateSingleRecipe(items, portions, excludeTitles, styleHint) {
   const excludeNote =
     excludeTitles.length > 0
-      ? `\nSchlage KEINE dieser bereits gezeigten Rezepte (oder sehr ähnliche) erneut vor: ${excludeTitles.join(
+      ? `\nSchlage KEIN Rezept vor, das einem dieser Titel entspricht oder sehr ähnlich ist: ${excludeTitles.join(
           ", "
-        )}. Denk dir wirklich andere Gerichte aus.`
+        )}. Denk dir wirklich etwas anderes aus.`
       : "";
 
   const prompt = `Hier sind die verfügbaren Lebensmittel eines Nutzers, der abnehmen möchte: ${items.join(
     ", "
   )}.
-Schlage ${count} VERSCHIEDENE Rezepte vor, die hauptsächlich mit diesen Zutaten umsetzbar sind
-(du kannst 1-2 Grundzutaten wie Salz, Öl, Gewürze pro Rezept ergänzen, falls nötig). Die ${count}
-Rezepte sollen sich spürbar voneinander unterscheiden (unterschiedliche Zubereitungsart, Hauptzutat
-oder Küchenstil). Strenge Vorgaben für JEDES Rezept:
+Schlage EIN Rezept vor, das hauptsächlich mit diesen Zutaten umsetzbar ist (du kannst 1-2
+Grundzutaten wie Salz, Öl, Gewürze ergänzen, falls nötig). ${styleHint} Strenge Vorgaben:
 - Eiweißreich (mindestens 30g Eiweiß pro Portion)
 - Moderate Kohlenhydrate (maximal 50g pro Portion)
 - Weniger als 700 kcal pro Portion
-Jedes Rezept ist für ${portions} Portion(en) insgesamt (Zutatenmengen für ${portions} Portion(en),
+Das Rezept ist für ${portions} Portion(en) insgesamt (Zutatenmengen für ${portions} Portion(en),
 aber "perPortion" gilt für EINE einzelne Portion).${excludeNote}
 
-WICHTIG: Schreibe ALLE Texte (Titel, Zutatennamen, Zubereitungsschritte, Tags) auf DEUTSCH.
+WICHTIG: Schreibe ALLE Texte (Titel, Zutatennamen, Zubereitungsschritte, Tags) auf DEUTSCH. Sei
+prägnant: maximal 6 Zutaten und maximal 4 Zubereitungsschritte.
 
-Antworte AUSSCHLIESSLICH mit einem JSON-ARRAY von ${count} Objekten in dieser Form, ohne Text
-drumherum:
-[
-  {
-    "id": "string-slug",
-    "title": "string",
-    "tags": ["Abnehmen", "eiweißreich"],
-    "basePortions": ${portions},
-    "prepMinutes": number,
-    "ingredients": [{"name": "string", "quantity": number, "unit": "string"}],
-    "steps": ["string", ...],
-    "perPortion": {"kcal": number, "proteinG": number, "carbsG": number, "fatG": number}
-  }
-]`;
+Antworte AUSSCHLIESSLICH mit einem JSON-Objekt in dieser Form, ohne Text drumherum:
+{
+  "id": "string-slug",
+  "title": "string",
+  "tags": ["Abnehmen", "eiweißreich"],
+  "basePortions": ${portions},
+  "prepMinutes": number,
+  "ingredients": [{"name": "string", "quantity": number, "unit": "string"}],
+  "steps": ["string", ...],
+  "perPortion": {"kcal": number, "proteinG": number, "carbsG": number, "fatG": number}
+}`;
 
   const text = await callGemini([{ text: prompt }]);
-  const parsed = extractJsonArray(text);
-  return parsed.map((r, idx) => ({
+  return extractJson(text);
+}
+
+// Generiert mehrere eiweißreiche / kohlenhydratmoderate / <700 kcal Rezepte
+// aus den vom Nutzer im Kühlschrank/Vorrat notierten Lebensmitteln. Die
+// Rezepte werden PARALLEL angefragt (statt eins nach dem anderen), damit es
+// spürbar schneller geht.
+// excludeTitles: Titel, die NICHT nochmal vorgeschlagen werden sollen
+// (z.B. wenn der Nutzer "andere Vorschläge" anfordert).
+async function generateRecipesFromPantryItems(items, portions, count = 3, excludeTitles = []) {
+  const hints = RECIPE_STYLE_HINTS.slice(0, count);
+  while (hints.length < count) hints.push(RECIPE_STYLE_HINTS[hints.length % RECIPE_STYLE_HINTS.length]);
+
+  const results = await Promise.all(
+    hints.map((hint) => generateSingleRecipe(items, portions, excludeTitles, hint))
+  );
+
+  return results.map((r, idx) => ({
     ...r,
     id: r.id || `pantry-${Date.now()}-${idx}`,
     source: "pantry",
