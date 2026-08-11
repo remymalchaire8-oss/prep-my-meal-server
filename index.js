@@ -10,6 +10,7 @@ app.use(express.json());
 
 app.post("/analyze-tiktok", async (req, res) => {
   const { videoUrl, portions } = req.body;
+  console.log(`[POST /analyze-tiktok] Requête reçue, videoUrl=${videoUrl}, portions=${portions}`);
   if (!videoUrl) {
     return res.status(400).json({ error: "videoUrl est requis" });
   }
