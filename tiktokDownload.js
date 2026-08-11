@@ -32,19 +32,26 @@ async function downloadAndExtractFrames(videoUrl, frameCount = 8) {
   fs.mkdirSync(workDir, { recursive: true });
   const videoPath = path.join(workDir, "video.mp4");
 
+  console.log(`[tiktok] Téléchargement démarré pour ${videoUrl}`);
   try {
-    await execFileAsync("yt-dlp", [
-      "-f",
-      "mp4",
-      "-o",
-      videoPath,
-      videoUrl,
-    ]);
+    // Timeout explicite de 45s : sans ça, si TikTok bloque/ralentit les
+    // téléchargements depuis l'IP du serveur cloud, yt-dlp peut rester
+    // bloqué indéfiniment sans jamais renvoyer d'erreur ni de log.
+    await execFileAsync(
+      "yt-dlp",
+      ["-f", "mp4", "-o", videoPath, videoUrl],
+      { timeout: 45000 }
+    );
+    console.log(`[tiktok] Téléchargement terminé pour ${videoUrl}`);
   } catch (err) {
     cleanup(workDir);
+    const timedOut = err.killed || err.signal === "SIGTERM";
+    console.error(`[tiktok] Échec du téléchargement pour ${videoUrl}:`, err.message);
     throw new Error(
-      "Échec du téléchargement de la vidéo TikTok. Vérifie le lien et que yt-dlp est installé. Détail: " +
-        err.message
+      timedOut
+        ? "Le téléchargement de la vidéo a expiré (45s). TikTok bloque parfois les téléchargements depuis les serveurs cloud — réessaie, ou teste avec un autre lien."
+        : "Échec du téléchargement de la vidéo TikTok. Vérifie le lien et que yt-dlp est installé. Détail: " +
+            err.message
     );
   }
 
