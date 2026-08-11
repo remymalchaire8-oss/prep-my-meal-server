@@ -7,10 +7,27 @@ const { v4: uuid } = require("uuid");
 
 const execFileAsync = promisify(execFile);
 
-// Télécharge une vidéo TikTok publique avec yt-dlp puis extrait quelques
-// frames avec ffmpeg. Nécessite que yt-dlp et ffmpeg soient installés sur
-// la machine qui exécute le serveur (voir README).
-async function downloadAndExtractFrames(videoUrl, frameCount = 4) {
+// Récupère la durée de la vidéo (en secondes) via ffprobe.
+async function getVideoDuration(videoPath) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+    videoPath,
+  ]);
+  const duration = parseFloat(stdout.trim());
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+// Télécharge une vidéo TikTok publique avec yt-dlp puis extrait des frames
+// RÉPARTIES SUR TOUTE LA DURÉE de la vidéo avec ffmpeg (au lieu de juste les
+// premières secondes), pour ne pas rater des ingrédients montrés plus tard
+// dans la vidéo. Nécessite que yt-dlp, ffmpeg et ffprobe soient installés
+// sur la machine qui exécute le serveur (voir README).
+async function downloadAndExtractFrames(videoUrl, frameCount = 8) {
   const workDir = path.join(os.tmpdir(), `prepmymeal-${uuid()}`);
   fs.mkdirSync(workDir, { recursive: true });
   const videoPath = path.join(workDir, "video.mp4");
@@ -31,13 +48,24 @@ async function downloadAndExtractFrames(videoUrl, frameCount = 4) {
     );
   }
 
+  // Calcule un fps qui répartit ~frameCount images sur toute la durée de
+  // la vidéo (au lieu d'un fps fixe qui ne couvrait que les 4 premières
+  // secondes). Si la durée n'a pas pu être lue, on retombe sur fps=1.
+  let duration = 0;
+  try {
+    duration = await getVideoDuration(videoPath);
+  } catch (_) {
+    duration = 0;
+  }
+  const fps = duration > 0 ? Math.max(frameCount / duration, 0.2) : 1;
+
   const framePattern = path.join(workDir, "frame-%02d.jpg");
   try {
     await execFileAsync("ffmpeg", [
       "-i",
       videoPath,
       "-vf",
-      `fps=1`,
+      `fps=${fps}`,
       "-frames:v",
       String(frameCount),
       framePattern,
