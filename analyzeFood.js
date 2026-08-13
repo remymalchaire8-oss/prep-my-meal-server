@@ -19,7 +19,15 @@ function extractJsonArray(text) {
   return JSON.parse(match[0]);
 }
 
-async function callGemini(parts) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Gemini gratuit renvoie parfois une erreur 503 "model overloaded" en cas de
+// pic de demande — c'est temporaire côté Google. On réessaie automatiquement
+// quelques fois avec un petit délai avant d'abandonner, au lieu de faire
+// échouer directement toute l'analyse pour l'utilisateur.
+async function callGemini(parts, attempt = 1) {
   if (!GEMINI_API_KEY) {
     throw new Error(
       "GEMINI_API_KEY manquante. Ajoute-la dans server/.env (clé gratuite sur https://aistudio.google.com/apikey)."
@@ -35,6 +43,15 @@ async function callGemini(parts) {
   const data = await response.json();
 
   if (!response.ok) {
+    const maxAttempts = 3;
+    if ((response.status === 503 || response.status === 429) && attempt < maxAttempts) {
+      const delayMs = attempt * 4000;
+      console.warn(
+        `[gemini] Erreur ${response.status} (surcharge), nouvelle tentative ${attempt + 1}/${maxAttempts} dans ${delayMs}ms`
+      );
+      await sleep(delayMs);
+      return callGemini(parts, attempt + 1);
+    }
     const message = data?.error?.message || JSON.stringify(data);
     throw new Error(`Gemini a renvoyé une erreur (${response.status}): ${message}`);
   }
